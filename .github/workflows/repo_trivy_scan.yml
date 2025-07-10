@@ -3,26 +3,20 @@ name: 'Repo Level Trivy Scan'
 on:
   pull_request:
   schedule:
-    # Runs daily at 4AM UTC == 12AM EDT
+    # Runs every 15 minutes for testing. Change to '0 4 * * *' for daily at midnight EDT.
     - cron: '*/15 * * * *'
 
 jobs:
-  # JOB 1: Build the Docker image using the custom script and push it to GHCR
+  # JOB 1: Build the Docker image and push it to GHCR
   build:
-    name: 'Repo Level Trivy Scan Build and Push Docker Image'
+    name: 'Build and Push Docker Image'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write # Required to push images to GHCR
 
-    # This section defines the outputs that this job will provide to other jobs
     outputs:
-      image-name: ${{ steps.tag-and-push.outputs.image-name }}
-      
-    # These variables are now available to ALL steps in this 'build' job
-    env:
-      DOCKER_IMAGE: newrelic/k8s-agents-operator
-      DOCKER_IMAGE_TAG: ci
+      image-name: ${{ steps.build-and-push-image.outputs.digest }}
 
     steps:
       - name: 'Checkout code'
@@ -40,24 +34,21 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: 'Download integrations'
-        run: go run downloader.go
-
-      - name: 'Build local Docker image with custom script'
-        run: DOCKER_PLATFORMS=linux/amd64 ./docker-build.sh . --load
-
-      - name: 'Tag and Push image to GHCR'
-        id: tag-and-push
-        run: |
-          IMAGE_ID=ghcr.io/${{ github.repository }}:${{ github.sha }}
-          # This command uses the env variables to find the source image
-          docker tag ${{ env.DOCKER_IMAGE }}:${{ env.DOCKER_IMAGE_TAG }} $IMAGE_ID
-          docker push $IMAGE_ID
-          echo "image-name=$IMAGE_ID" >> $GITHUB_OUTPUT
+      # --- This single action replaces all the old custom build steps ---
+      - name: 'Build and push Docker image'
+        id: build-and-push-image
+        uses: docker/build-push-action@v6
+        with:
+          # This tells the action to look for the Dockerfile in the current directory.
+          context: .
+          # This tells the action to push to the registry after building.
+          push: true
+          # This creates a unique tag for the image based on the commit SHA.
+          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
 
   # JOB 2: Call the reusable organization workflow
   scan:
-    name: 'Trigger Organization Scan from Repo Level Trivy Scan'
+    name: 'Trigger Organization Scan'
     needs: build
     permissions:
       contents: read
